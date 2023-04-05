@@ -1,25 +1,22 @@
 import numpy as np
-import matplotlib.pyplot as plt
-#import matplotlib
-#matplotlib.use('agg') 
 import pandas as pd
 from dateutil.relativedelta import relativedelta
-#import iris
 import xarray 
 from scipy.integrate import cumtrapz
-#from iris.analysis.calculus import cube_delta
-#from iris.analysis.calculus import differentiate
 import multiprocessing
 import sys,copy
 from windspharm.xarray import VectorWind
-class divergent_wind:
+class Hadley_Walker:
     def __init__(self,dau,dav,outname):
         # Load file #
+        if not isinstance(dau, xarray.DataArray) or not isinstance(dav, xarray.DataArray):
+        	raise TypeError('u and v must be xarray.DataArray instances')
         self.a0 = 6371000
         self.g = 9.81
         self.outname =outname
         self.da_u = dau
-        self.pcoord = list(dau.coords)[2]
+        self.pcoord = list(dau.coords)[1]
+        print(self.pcoord)
         self.da_v = dav
         array=dau
         try:
@@ -57,7 +54,7 @@ class divergent_wind:
         if np.mean(array.coords[self.pcoord].data)<1000:
             p=array.coords[self.pcoord].data*100
         else:
-            p=array.coord[self.pcoord].data
+            p=array.coords[self.pcoord].data
             p=np.flip(p)
             array.data=np.flip(array.data,axis=1)
 
@@ -110,22 +107,20 @@ class divergent_wind:
         if save:
             da.to_netcdf(outfil)
         return da
-    def compute_streamfunction(self,outname,load=False,stream=False,omega=False,save=False,returni=False):
-        if load:
-            self.v_div = xr.open_dataarray(outname+'_vdiv.nc')
+    def compute_diagnostics(self,stream=False,mass_omega=False,returni=False):
         if stream:
             xr_psi = self.streamfunction(self.v_div,typo='hadley')
-            self.array_add_attrs_Save(xr_psi,'streamfunction',{'long_name':'Meridional streamfunction','units':'kg m**-2 s**-1'},outfil=outname+'_stream_phi.nc',save=save)
+            self.array_add_attrs_Save(xr_psi,'streamfunction',{'long_name':'Meridional streamfunction','units':'kg m**-2 s**-1'},outfil=self.outname+'_stream_phi.nc',save=True)
             psi_lambda = self.streamfunction(self.u_div,typo='walker')
-            self.array_add_attrs_Save(psi_lambda,'streamfunction',{'long_name':'Zonal streamfunction','units':'kg m**-2 s**-1'},outfil=outname+'_stream_lambda.nc',save=save)
+            self.array_add_attrs_Save(psi_lambda,'streamfunction',{'long_name':'Zonal streamfunction','units':'kg m**-2 s**-1'},outfil=self.outname+'_stream_lambda.nc',save=True)
 
-        if omega:
+        if mass_omega:
             mass_flux,omega = self.omega_2d('phi',self.v_div)
-            omega=self.array_add_attrs_Save(omega,'omega',{'long_name':'Vertical velocity meridional component','units':'Pa s**-1'},outfil=outname+'_omega_phi.nc',save=save)
-            mass_flux=self.array_add_attrs_Save(mass_flux,'mass_flux',{'long_name':'Meridional mass flux','units':'kg m**-2 s**-1'},outfil=outname+'_mass_phi.nc',save=save)
+            omega=self.array_add_attrs_Save(omega,'omega',{'long_name':'Vertical velocity meridional component','units':'Pa s**-1'},outfil=self.outname+'_omega_phi.nc',save=True)
+            mass_flux=self.array_add_attrs_Save(mass_flux,'mass_flux',{'long_name':'Meridional mass flux','units':'kg m**-2 s**-1'},outfil=self.outname+'_mass_phi.nc',save=True)
             mass_flux_lambda,omega_lambda = self.omega_2d('lambda',self.u_div)
-            omega_lambda=self.array_add_attrs_Save(omega_lambda,'omega',{'long_name':'Vertical velocity zonal component','units':'Pa s**-1'},outfil=outname+'_omega_lambda.nc',save=save)
-            mass_flux_lambda=self.array_add_attrs_Save(mass_flux_lambda,'mass_flux',{'long_name':'Zonal mass flux','units':'kg m**-2 s**-1'},outfil=outname+'_mass_lambda.nc',save=save)
+            omega_lambda=self.array_add_attrs_Save(omega_lambda,'omega',{'long_name':'Vertical velocity zonal component','units':'Pa s**-1'},outfil=self.outname+'_omega_lambda.nc',save=True)
+            mass_flux_lambda=self.array_add_attrs_Save(mass_flux_lambda,'mass_flux',{'long_name':'Zonal mass flux','units':'kg m**-2 s**-1'},outfil=self.outname+'_mass_lambda.nc',save=True)
 
             if returni:
                 return mass_flux,omega,mass_flux_lambda,omega_lambda
@@ -146,9 +141,10 @@ class divergent_wind:
         return udiv,vdiv,urot,vrot
     def get_components(self,save):
         M = []
-        
-        self.da_u=self.da_u.interpolate_na(dim='lat',method='linear',fill_value='extrapolate')
-        self.da_v=self.da_v.interpolate_na(dim='lat',method='linear',fill_value='extrapolate')
+        if self.da_u.isnull().any():
+            print('NaN values found, extrapolating')
+            self.da_u=self.da_u.interpolate_na(dim='lat',method='linear',fill_value='extrapolate')
+            self.da_v=self.da_v.interpolate_na(dim='lat',method='linear',fill_value='extrapolate')
         if len(self.da_u.shape)>3 and self.da_u.shape[0]==1:
             M=[self.get_uchi(0)]
         else:
@@ -171,10 +167,10 @@ class divergent_wind:
         full_vrot = xarray.concat(v_rot_list,dim='time')
         full_urot = xarray.concat(u_rot_list,dim='time')
         if save:
-            full_udv.to_netcdf(outname+'_udiv.nc')
-            full_vdv.to_netcdf(outname+'_vdiv.nc')
-            full_vrot.to_netcdf(outname+'_vrot.nc')
-            full_urot.to_netcdf(outname+'_urot.nc')
+            full_udv.to_netcdf(self.outname+'_udiv.nc')
+            full_vdv.to_netcdf(self.outname+'_vdiv.nc')
+            full_vrot.to_netcdf(self.outname+'_vrot.nc')
+            full_urot.to_netcdf(self.outname+'_urot.nc')
         else:
             self.u_div=full_udv
             self.v_div=full_vdv
