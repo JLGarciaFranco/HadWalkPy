@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-import iris
 import xarray as xr 
 from divergent_wind import Hadley_Walker
 

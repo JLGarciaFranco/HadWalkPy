@@ -1,0 +1,13 @@
+name: hadley
+channels:
+  - defaults
+dependencies:
+  - pip
+  - numpy
+  - netcdf4
+  - dask
+  - scipy
+  - xarray 
+  - iris 
+  - windspharm
+  - python
