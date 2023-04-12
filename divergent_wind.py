@@ -7,7 +7,7 @@ import multiprocessing
 import sys,copy
 from windspharm.xarray import VectorWind
 class Hadley_Walker:
-    def __init__(self,dau,dav,outname):
+    def __init__(self,dau,dav,outname,multi_flag=False):
         # Load file #
         if not isinstance(dau, xarray.DataArray) or not isinstance(dav, xarray.DataArray):
         	raise TypeError('u and v must be xarray.DataArray instances')
@@ -16,8 +16,8 @@ class Hadley_Walker:
         self.outname =outname
         self.da_u = dau
         self.pcoord = list(dau.coords)[1]
-        print(self.pcoord)
         self.da_v = dav
+        self.no_multiprocess=multi_flag
         array=dau
         try:
             self.lambda_lon=array.longitude
@@ -108,6 +108,7 @@ class Hadley_Walker:
             da.to_netcdf(outfil)
         return da
     def compute_diagnostics(self,stream=False,mass_omega=False,returni=False):
+        print('computing streamfunction and omega ')
         if stream:
             xr_psi = self.streamfunction(self.v_div,typo='hadley')
             self.array_add_attrs_Save(xr_psi,'streamfunction',{'long_name':'Meridional streamfunction','units':'kg m**-2 s**-1'},outfil=self.outname+'_stream_phi.nc',save=True)
@@ -128,6 +129,7 @@ class Hadley_Walker:
         dt = self.da_u.time[it]	
         w = VectorWind(self.da_u[it],self.da_v[it])
     #		uchi, vchi = w.irrotationalcomponent()
+        print('decomposing wind time-step ',it)
         udiv, vdiv, urot, vrot = w.helmholtz(truncation=21)
         #strmf,vp = w.sfvp(truncation=21)
         urot = urot.assign_coords(time=dt)
@@ -147,8 +149,12 @@ class Hadley_Walker:
             self.da_v=self.da_v.interpolate_na(dim='lat',method='linear',fill_value='extrapolate')
         if len(self.da_u.shape)>3 and self.da_u.shape[0]==1:
             M=[self.get_uchi(0)]
+        elif self.no_multiprocess:
+            M=[]
+            for it in range(self.da_u.shape[0]):
+                M.append(self.get_uchi(0))	
         else:
-            with multiprocessing.Pool() as pool:
+            with multiprocessing.Pool(6) as pool:
                 M = pool.map(self.get_uchi,list(range(self.da_u.shape[0])))
 
         u_div_list=[]
