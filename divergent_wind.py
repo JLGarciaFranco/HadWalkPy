@@ -15,8 +15,10 @@ class Hadley_Walker:
         self.g = 9.81
         self.outname =outname
         self.da_u = dau
-        self.pcoord = list(dau.coords)[1]
         self.da_v = dav
+
+        self.check_timecoord()
+        self.pcoord = list(self.da_u.coords)[1]
         self.no_multiprocess=multi_flag
         array=dau
         try:
@@ -26,6 +28,22 @@ class Hadley_Walker:
             self.lambda_lon=array.lon
             self.phi_lat=array.lat
 
+    def check_timecoord(self):
+        if 'time' in self.da_u.coords.keys() and 'time' in self.da_v.coords.keys():
+            self.month_flag = False
+            return 
+        elif 'month' in self.da_u.coords.keys() and 'month' in self.da_v.coords.keys():
+            self.da_u=self.da_u.rename({'month':'time'})
+            self.da_v=self.da_v.rename({'month':'time'})
+            self.da_u = self.da_u.transpose("time",...)	
+            self.da_v = self.da_v.transpose("time",...)	
+            ccoord_list = list(self.da_u.coords)
+            current_indexes = self.da_u.indexes
+            desired_order = ['time', ccoord_list[0], ccoord_list[1],ccoord_list[2]]
+            reordered_indexes = {index_name: current_indexes[index_name] for index_name in desired_order}
+            self.da_u = self.da_u.reindex(reordered_indexes)
+            self.da_v = self.da_v.reindex(reordered_indexes)
+            self.month_flag = True
     def streamfunction(self,array,typo,collapsed=False):
         fact = 1
         if np.max(array.coords[self.pcoord].data)<2000:
@@ -102,7 +120,6 @@ class Hadley_Walker:
     def array_add_attrs_Save(self,da,name,attributes,outfil,save=False):
         da.name=name
         da.attrs=attributes
-
 
         if save:
             da.to_netcdf(outfil)
