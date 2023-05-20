@@ -15,7 +15,7 @@ for var in ['ua','va']:
 	data_dicc[var+'clim']=da[var].groupby('time.month').mean()
 
 #Define outputname
-outname = 'output/HadGEM3-GC31-LL_amip_'
+
 # Save individual wind components Udiv,Vdiv,Urot,Vrot
 save_components=False
 # Save  and compute streamfunction
@@ -31,6 +31,7 @@ div_wind.compute_diagnostics(stream=stream_bool,mass_omega=mass_bool)
 # Actual functions
 # Init class as xarray dataarrays U,V
 
+outname = 'output/HadGEM3-GC31-LL_amip_'
 div_wind = Hadley_Walker(data_dicc['ua'],data_dicc['va'],outname)
 div_wind.get_components(save_components)
 div_wind.compute_diagnostics(stream=stream_bool,mass_omega=mass_bool)
