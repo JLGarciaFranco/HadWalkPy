@@ -33,17 +33,40 @@ class Hadley_Walker:
             self.month_flag = False
             return 
         elif 'month' in self.da_u.coords.keys() and 'month' in self.da_v.coords.keys():
+            # Rename month to time 
             self.da_u=self.da_u.rename({'month':'time'})
             self.da_v=self.da_v.rename({'month':'time'})
-            self.da_u = self.da_u.transpose("time",...)	
-            self.da_v = self.da_v.transpose("time",...)	
-            ccoord_list = list(self.da_u.coords)
+
+            # Find the current order 
+            lat, lat_dim = self._find_latitude_coordinate(self.da_u)
+            lon, lon_dim = self._find_longitude_coordinate(self.da_u)
+            plev_c, plev_dim = self._find_pressure_coordinate(self.da_u)
+            order = list(range(self.da_u.ndim))
+            order.remove(lat_dim)
+            order.remove(plev_dim)
+            order.remove(lon_dim)
+            order.insert(1, plev_dim)
+            order.insert(2, lat_dim)
+            order.insert(3, lon_dim)
+
+            # Reorder 
+            reorder = [order.index(i) for i in range(self.da_u.ndim)]
+            apiorder = [self.da_u.dims[i] for i in order]
+            self.da_u = self.da_u.transpose(*apiorder)	
+            self.da_v = self.da_v.transpose(*apiorder)	
+
+            # Reindex
             current_indexes = self.da_u.indexes
-            desired_order = ['time', ccoord_list[0], ccoord_list[1],ccoord_list[2]]
-            reordered_indexes = {index_name: current_indexes[index_name] for index_name in desired_order}
+            print(self.da_u.shape)
+            reordered_indexes = {index_name: current_indexes[index_name] for index_name in apiorder}
             self.da_u = self.da_u.reindex(reordered_indexes)
-            self.da_v = self.da_v.reindex(reordered_indexes)
+            self.da_v = self.da_v.reindex(reordered_indexes)  
+            print(self.da_u)
+            print(self.da_v)
             self.month_flag = True
+
+            return
+            
     def streamfunction(self,array,typo,collapsed=False):
         fact = 1
         if np.max(array.coords[self.pcoord].data)<2000:
@@ -198,10 +221,48 @@ class Hadley_Walker:
             self.u_div=full_udv
             self.v_div=full_vdv
         return
+	
+    def _find_latitude_coordinate(self,array):
+        return self._find_coord_and_dim(
+        	array,
+	        lambda c: (c.name in ('latitude', 'lat') or
+		   c.attrs.get('units') == 'degrees_north' or
+		   c.attrs.get('axis') == 'Y'),
+	         'latitude')
 
-# Load U, V from ERA5
 
-# Actual functions
+    def _find_coord_and_dim(self,array, predicate, name):
+        """
+        Find a dimension coordinate in an `xarray.DataArray` that satisfies
+        a predicate function.
 
-# ERA5 data, use one for each year 
+        """
+        candidates = [coord
+    		for coord in [array.coords[n] for n in array.dims]
+    			if predicate(coord)]
+
+        if not candidates:
+    	    raise ValueError('cannot find a {!s} coordinate'.format(name))
+        if len(candidates) > 1:
+            msg = 'multiple {!s} coordinates are not allowed'
+            raise ValueError(msg.format(name))
+        coord = candidates[0]
+        dim = array.dims.index(coord.name)
+        return coord, dim
+    def _find_longitude_coordinate(self,array):
+        """Find a longitude dimension coordinate in an `xarray.DataArray`."""
+        return self._find_coord_and_dim(
+                array,
+                lambda c: (c.name in ('longitude', 'lon') or
+                c.attrs.get('units') == 'degrees_east' or
+                c.attrs.get('axis') == 'X'),
+                'longitude')
+    def _find_pressure_coordinate(self,array):
+        """Find a longitude dimension coordinate in an `xarray.DataArray`."""
+        return self._find_coord_and_dim(
+	    array,
+		lambda c: (c.name in ('plev', 'level','lev','pressure') or
+		   c.attrs.get('units') == 'hPa' or
+		   c.attrs.get('axis') == 'Z'),
+	    'pressure')
 

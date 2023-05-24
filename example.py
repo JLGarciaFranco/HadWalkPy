@@ -13,7 +13,6 @@ for var in ['ua','va']:
 	da = xr.open_dataset(filename)
 	data_dicc[var]=da[var]
 	data_dicc[var+'clim']=da[var].groupby('time.month').mean()
-
 #Define outputname
 
 # Save individual wind components Udiv,Vdiv,Urot,Vrot
