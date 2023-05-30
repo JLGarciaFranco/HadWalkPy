@@ -18,7 +18,7 @@ class Hadley_Walker:
         self.da_v = dav
 
         self.check_timecoord()
-        self.pcoord = list(self.da_u.coords)[1]
+
         self.no_multiprocess=multi_flag
         array=dau
         try:
@@ -29,6 +29,11 @@ class Hadley_Walker:
             self.phi_lat=array.lat
 
     def check_timecoord(self):
+        lat, lat_dim = self._find_latitude_coordinate(self.da_u)
+        lon, lon_dim = self._find_longitude_coordinate(self.da_u)
+        plev_c, plev_dim = self._find_pressure_coordinate(self.da_u)
+        self.pcoord = plev_c.name#list(self.da_u.coords)[1]
+        print('pcoord name',self.pcoord)
         if 'time' in self.da_u.coords.keys() and 'time' in self.da_v.coords.keys():
             self.month_flag = False
             return 
@@ -38,9 +43,7 @@ class Hadley_Walker:
             self.da_v=self.da_v.rename({'month':'time'})
 
             # Find the current order 
-            lat, lat_dim = self._find_latitude_coordinate(self.da_u)
-            lon, lon_dim = self._find_longitude_coordinate(self.da_u)
-            plev_c, plev_dim = self._find_pressure_coordinate(self.da_u)
+
             order = list(range(self.da_u.ndim))
             order.remove(lat_dim)
             order.remove(plev_dim)
@@ -48,7 +51,6 @@ class Hadley_Walker:
             order.insert(1, plev_dim)
             order.insert(2, lat_dim)
             order.insert(3, lon_dim)
-
             # Reorder 
             reorder = [order.index(i) for i in range(self.da_u.ndim)]
             apiorder = [self.da_u.dims[i] for i in order]
@@ -57,12 +59,10 @@ class Hadley_Walker:
 
             # Reindex
             current_indexes = self.da_u.indexes
-            print(self.da_u.shape)
             reordered_indexes = {index_name: current_indexes[index_name] for index_name in apiorder}
             self.da_u = self.da_u.reindex(reordered_indexes)
             self.da_v = self.da_v.reindex(reordered_indexes)  
-            print(self.da_u)
-            print(self.da_v)
+            print(self.da_v.shape)
             self.month_flag = True
 
             return
@@ -261,7 +261,7 @@ class Hadley_Walker:
         """Find a longitude dimension coordinate in an `xarray.DataArray`."""
         return self._find_coord_and_dim(
 	    array,
-		lambda c: (c.name in ('plev', 'level','lev','pressure') or
+		lambda c: (c.name in ('plev', 'level','lev','pressure','air_pressure') or
 		   c.attrs.get('units') == 'hPa' or
 		   c.attrs.get('axis') == 'Z'),
 	    'pressure')
