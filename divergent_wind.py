@@ -8,39 +8,68 @@ import sys,copy
 from windspharm.xarray import VectorWind
 class Hadley_Walker:
     def __init__(self,dau,dav,outname,multi_flag=False):
+        """Return one-dimensional nearest-neighbor indexes based on user-specified centers.
+
+	    Parameters 
+	    ---------- 
+	    dau : xarray-DataArray 
+		3-dimensional object of xarray for the zonal component of the wind U.  
+	    dav : xarray-DataArray 
+		3-dimensional object of xarray for the meridional component of the wind V.  
+	    outname : string
+		Main string to name the output, typically containts the main path and model name.   
+	    multi_flag : boolean
+		True to indicate user wants to use the multiprocessing routines which may make things faster or also might request too much memory. Default is False.
+	 
+	    Returns 
+	    ------- 
+        Class of Hadley_Walker instance 
+
+        """
         # Load file #
         if not isinstance(dau, xarray.DataArray) or not isinstance(dav, xarray.DataArray):
         	raise TypeError('u and v must be xarray.DataArray instances')
+
+        # Define constants
         self.a0 = 6371000
         self.g = 9.81
         self.outname =outname
         self.da_u = dau
         self.da_v = dav
 
+        # Check time coordinate
         self.check_timecoord()
 
+        # Multiprocess data True or False
         self.no_multiprocess=multi_flag
-        array=dau
+
         try:
-            self.lambda_lon=array.longitude
-            self.phi_lat=array.latitude
+            self.lambda_lon=dau.longitude
+            self.phi_lat=dau.latitude
         except:
-            self.lambda_lon=array.lon
-            self.phi_lat=array.lat
+            self.lambda_lon=dau.lon
+            self.phi_lat=dau.lat
 
     def check_timecoord(self):
+        """Check the time coordinate in case the input are monthly or day of year climatological means
+        
+        """
         lat, lat_dim = self._find_latitude_coordinate(self.da_u)
         lon, lon_dim = self._find_longitude_coordinate(self.da_u)
         plev_c, plev_dim = self._find_pressure_coordinate(self.da_u)
         self.pcoord = plev_c.name#list(self.da_u.coords)[1]
-        print('pcoord name',self.pcoord)
+
         if 'time' in self.da_u.coords.keys() and 'time' in self.da_v.coords.keys():
             self.month_flag = False
             return 
-        elif 'month' in self.da_u.coords.keys() and 'month' in self.da_v.coords.keys():
+        else:
+            if 'month' in self.da_u.coords.keys() and 'month' in self.da_v.coords.keys():
             # Rename month to time 
-            self.da_u=self.da_u.rename({'month':'time'})
-            self.da_v=self.da_v.rename({'month':'time'})
+                self.da_u=self.da_u.rename({'month':'time'})
+                self.da_v=self.da_v.rename({'month':'time'})
+            elif 'dayofyear' in self.da_u.coords.keys(): 
+                self.da_u=self.da_u.rename({'dayofyear':'time'})
+                self.da_v=self.da_v.rename({'dayofyear':'time'})
 
             # Find the current order 
 
@@ -62,7 +91,6 @@ class Hadley_Walker:
             reordered_indexes = {index_name: current_indexes[index_name] for index_name in apiorder}
             self.da_u = self.da_u.reindex(reordered_indexes)
             self.da_v = self.da_v.reindex(reordered_indexes)  
-            print(self.da_v.shape)
             self.month_flag = True
 
             return
@@ -75,6 +103,8 @@ class Hadley_Walker:
             p=array.coords[self.pcoord].data
             p=np.flip(p)
             array.data=np.flip(array.data,axis=1)
+        print(array,self.pcoord,p)
+
         array=array.assign_coords({self.pcoord:p})
         if typo=='hadley':
             fact=2*self.a0*np.pi/9.81
@@ -102,48 +132,49 @@ class Hadley_Walker:
         array=array.assign_coords({self.pcoord:p})
 
         cos_alpha = np.cos(np.deg2rad(self.phi_lat)).data
+        fact_ag = 1/(self.a0*self.g)
+        fact_om = -1/(self.a0*cos_alpha)
+        mass_flux = copy.deepcopy(array)
+        omega = copy.deepcopy(array)
         if coord=='phi':
-            fact_ag = 1/(self.a0*self.g)
-            fact_om = -1/(self.a0*cos_alpha)
-            mass_flux = copy.deepcopy(array)
-            omega = copy.deepcopy(array)
-            if typo=='div':
-                grad_phi = np.gradient(array.data*cos_alpha[:,np.newaxis],np.deg2rad(self.phi_lat).data,axis=2)
-                psi1=cumtrapz(grad_phi,x=p,axis=1,initial=0)
-                m_phi = fact_ag*psi1
-                mass_flux.data = m_phi
-                omega_phi = psi1*fact_om[:,np.newaxis]
-                omega.data = omega_phi
-
-            elif typo=='psi':
-                psi = array
-                psi1=cumtrapz(psi.data,x=p,axis=1,initial=0)
-                psi1=cumtrapz(psi.data,x=p,axis=1,initial=0)
-
-                psi_phi = psi.data*cos_alpha[:,np.newaxis]
-                psi_grad = copy.deepcopy(psi)
-                psi_grad.data = np.gradient(psi_phi,np.deg2rad(alpha),axis=2)
-                psi_grad.data = psi_grad.data*fact[:,np.newaxis]
-                psi_mean = psi_grad.collapsed('time',iris.analysis.MEAN)
+            grad_phi = np.gradient(array.data*cos_alpha[:,np.newaxis],np.deg2rad(self.phi_lat).data,axis=2)
+            psi1=cumtrapz(grad_phi,x=p,axis=1,initial=0)
+            m_phi = fact_ag*psi1
+            mass_flux.data = m_phi
+            omega_phi = psi1*fact_om[:,np.newaxis]
+            omega.data = omega_phi
             return mass_flux,omega
         elif coord=='lambda':
-            fact_ag = 1/(self.a0*self.g)
-            fact_om = -1/(self.a0*cos_alpha)
-            mass_flux = copy.deepcopy(array)
-            omega = copy.deepcopy(array)
-            if typo=='div':
-                grad_phi = np.gradient(array.data,np.deg2rad(self.lambda_lon).data,axis=3)
-                psi1=cumtrapz(grad_phi,x=p,axis=1,initial=0)
-                m_phi = fact_ag*psi1
-                mass_flux.data = m_phi
-                omega_phi = psi1*fact_om[:,np.newaxis]
-                omega.data = omega_phi
+            grad_phi = np.gradient(array.data,np.deg2rad(self.lambda_lon).data,axis=3)
+            psi1=cumtrapz(grad_phi,x=p,axis=1,initial=0)
+            m_phi = fact_ag*psi1
+            mass_flux.data = m_phi
+            omega_phi = psi1*fact_om[:,np.newaxis]
+            omega.data = omega_phi
 
             return mass_flux,omega
     def array_add_attrs_Save(self,da,name,attributes,outfil,save=False):
+        """ Saving output with specified attributes
+
+	    Parameters 
+	    ---------- 
+	    da : xarray-DataArray 
+		xarray.DataArray to be saved  
+	    name : string 
+		Name of field.  
+	    attributes : dict
+		Dictionary of xarray attributes.   
+
+	    multi_flag : boolean
+		True to indicate user wants to use the multiprocessing routines which may make things faster or also might request too much memory. Default is False.
+	 
+	    Returns 
+	    ------- 
+
+        """
         da.name=name
         da.attrs=attributes
-
+        da[self.pcoord]=da[self.pcoord]/100.
         if save:
             da.to_netcdf(outfil)
         return da
@@ -187,6 +218,14 @@ class Hadley_Walker:
             print('NaN values found, extrapolating')
             self.da_u=self.da_u.interpolate_na(dim='lat',method='linear',fill_value='extrapolate')
             self.da_v=self.da_v.interpolate_na(dim='lat',method='linear',fill_value='extrapolate')
+            if self.da_u.isnull().any():
+                print(np.where(self.da_u.isnull())[1])
+                plev = self.da_u.plev
+
+#                self.da_u = self.da_u.where(self.da_u.notnull())
+#                self.da_u=self.da_u[plev>100]#interpolate_na(dim='plev',method='linear',fill_value='extrapolate')
+#                self.da_v=self.da_v[plev>100]#interpolate_na(dim='plev',method='linear',fill_value='extrapolate')
+
         if len(self.da_u.shape)>3 and self.da_u.shape[0]==1:
             M=[self.get_uchi(0)]
         elif self.no_multiprocess:
