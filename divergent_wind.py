@@ -8,7 +8,7 @@ import sys,copy
 from windspharm.xarray import VectorWind
 class Hadley_Walker:
     def __init__(self,dau,dav,outname,multi_flag=False):
-        """Return one-dimensional nearest-neighbor indexes based on user-specified centers.
+        """ Class to compute the divergent wind components and or Walker and Had. Circulation
 
 	    Parameters 
 	    ---------- 
@@ -49,7 +49,17 @@ class Hadley_Walker:
         except:
             self.lambda_lon=dau.lon
             self.phi_lat=dau.lat
-
+        #self.lat_lon_check()
+    def lat_lon_check(self):
+        print(self.phi_lat)
+        if self.phi_lat.data[0]>self.phi_lat.data[-1]:
+            self.phi_lat=np.flip(self.phi_lat)
+            array.data=np.flip(array.data,axis=2)
+            array.latitude=np.flip(array.latitude,axis=2)
+        if self.lambda_lon.data[0]>self.lambda_lon.data[-1]:
+            self.lambda_lon=np.flip(self.lambda_lon)
+            array.longitude=np.flip(array.longitude)
+            array.data=np.flip(array.data,axis=3)
     def check_timecoord(self):
         """Check the time coordinate in case the input are monthly or day of year climatological means
         
@@ -57,8 +67,9 @@ class Hadley_Walker:
         lat, lat_dim = self._find_latitude_coordinate(self.da_u)
         lon, lon_dim = self._find_longitude_coordinate(self.da_u)
         plev_c, plev_dim = self._find_pressure_coordinate(self.da_u)
-        self.pcoord = plev_c.name#list(self.da_u.coords)[1]
-
+        self.pcoord = plev_c.name#list(self.da_u.coords)[1] 
+        print(self.pcoord)
+        print(lat_dim)
         if 'time' in self.da_u.coords.keys() and 'time' in self.da_v.coords.keys():
             self.month_flag = False
             return 
@@ -101,10 +112,12 @@ class Hadley_Walker:
             p=array.coords[self.pcoord].data*100
         else:
             p=array.coords[self.pcoord].data
+        if p[0]<1:# or p[-1]>=1000:
+            print('flipped')
             p=np.flip(p)
             array.data=np.flip(array.data,axis=1)
-        print(array,self.pcoord,p)
-
+        else:
+            print('not flipped')
         array=array.assign_coords({self.pcoord:p})
         if typo=='hadley':
             fact=2*self.a0*np.pi/9.81
@@ -115,22 +128,32 @@ class Hadley_Walker:
 
             return psi
         elif typo=='walker':
-
             fact=-1*self.a0*np.pi/9.81
             psi=copy.deepcopy(array)
             psi1=cumtrapz(psi.data,x=p,axis=1,initial=0)
             psi.data=psi1*fact
             return psi
     def omega_2d(self,coord,array,typo='div'):
-        if np.mean(array.coords[self.pcoord].data)<1000:
+        """ Compute Omega and mass flux on each component
+
+
+        """
+        # Correction for pressure if pressure is in hPa 
+        # pressure must be in Pa. 
+        if np.max(array.coords[self.pcoord].data)<2000:
+            print('multiplied p')
             p=array.coords[self.pcoord].data*100
         else:
             p=array.coords[self.pcoord].data
+        if p[0]<100 or p[-1]>1e4:
             p=np.flip(p)
             array.data=np.flip(array.data,axis=1)
-
+        else:
+            print('not flipped omega')
+            #p=np.flip(p)
+            #array.data=np.flip(array.data,axis=1)
+        print(p)
         array=array.assign_coords({self.pcoord:p})
-
         cos_alpha = np.cos(np.deg2rad(self.phi_lat)).data
         fact_ag = 1/(self.a0*self.g)
         fact_om = -1/(self.a0*cos_alpha)
@@ -138,6 +161,9 @@ class Hadley_Walker:
         omega = copy.deepcopy(array)
         if coord=='phi':
             grad_phi = np.gradient(array.data*cos_alpha[:,np.newaxis],np.deg2rad(self.phi_lat).data,axis=2)
+            if self.phi_lat.data[0]>self.phi_lat.data[-1]:
+                print('reversed phi')
+                grad_phi=grad_phi*(-1)
             psi1=cumtrapz(grad_phi,x=p,axis=1,initial=0)
             m_phi = fact_ag*psi1
             mass_flux.data = m_phi
@@ -145,8 +171,10 @@ class Hadley_Walker:
             omega.data = omega_phi
             return mass_flux,omega
         elif coord=='lambda':
-            grad_phi = np.gradient(array.data,np.deg2rad(self.lambda_lon).data,axis=3)
-            psi1=cumtrapz(grad_phi,x=p,axis=1,initial=0)
+
+            grad_lam = np.gradient(array.data,np.deg2rad(self.lambda_lon).data,axis=3)
+
+            psi1=cumtrapz(grad_lam,x=p,axis=1,initial=0)
             m_phi = fact_ag*psi1
             mass_flux.data = m_phi
             omega_phi = psi1*fact_om[:,np.newaxis]
@@ -174,7 +202,7 @@ class Hadley_Walker:
         """
         da.name=name
         da.attrs=attributes
-        da[self.pcoord]=da[self.pcoord]/100.
+#        da[self.pcoord]=da[self.pcoord]/100.
         if save:
             da.to_netcdf(outfil)
         return da
@@ -199,10 +227,8 @@ class Hadley_Walker:
     def get_uchi(self,it):
         dt = self.da_u.time[it]	
         w = VectorWind(self.da_u[it],self.da_v[it])
-    #		uchi, vchi = w.irrotationalcomponent()
         print('decomposing wind time-step ',it)
         udiv, vdiv, urot, vrot = w.helmholtz(truncation=21)
-        #strmf,vp = w.sfvp(truncation=21)
         urot = urot.assign_coords(time=dt)
         vrot = vrot.assign_coords(time=dt)
         urot = urot.expand_dims('time')
@@ -218,10 +244,9 @@ class Hadley_Walker:
             print('NaN values found, extrapolating')
             self.da_u=self.da_u.interpolate_na(dim='lat',method='linear',fill_value='extrapolate')
             self.da_v=self.da_v.interpolate_na(dim='lat',method='linear',fill_value='extrapolate')
-            if self.da_u.isnull().any():
-                print(np.where(self.da_u.isnull())[1])
-                plev = self.da_u.plev
-
+            #if self.da_u.isnull().any():
+            #    print(np.where(self.da_u.isnull())[1])
+            #    plev = self.da_u.plev
 #                self.da_u = self.da_u.where(self.da_u.notnull())
 #                self.da_u=self.da_u[plev>100]#interpolate_na(dim='plev',method='linear',fill_value='extrapolate')
 #                self.da_v=self.da_v[plev>100]#interpolate_na(dim='plev',method='linear',fill_value='extrapolate')
@@ -242,7 +267,6 @@ class Hadley_Walker:
         u_rot_list=[]
         for result in M:
             udiv,vdiv,urot,vrot=result
-                    
             u_div_list.append(udiv)	
             v_div_list.append(vdiv)	
             v_rot_list.append(vrot)	
@@ -256,9 +280,8 @@ class Hadley_Walker:
             full_vdv.to_netcdf(self.outname+'_vdiv.nc')
             full_vrot.to_netcdf(self.outname+'_vrot.nc')
             full_urot.to_netcdf(self.outname+'_urot.nc')
-        else:
-            self.u_div=full_udv
-            self.v_div=full_vdv
+        self.u_div=full_udv
+        self.v_div=full_vdv
         return
 	
     def _find_latitude_coordinate(self,array):
