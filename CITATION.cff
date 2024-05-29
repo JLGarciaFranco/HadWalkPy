@@ -1,0 +1,10 @@
+cff-version: 1.1.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: García-Franco
+  given-names: Jorge L.
+orcid: https://orcid.org/0000-0002-0396-9744
+title: HadWalkPy
+version: v1.1
+date-released: 2024-05-29
+                         
