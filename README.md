@@ -3,4 +3,6 @@ The main features of the code are:
   1. Computation of the irrotational and non-divergent components of the wind (Helmholtz decomposition)
   2. Local Hadley-Walker circulation characterized by streamfunction and vertical velocities. 
 
-The code is built into a single class under the file: 
+The code is built into a single class under the file: decompose_wind.py. 
+
+An example code with comments is found under the file: example.py
