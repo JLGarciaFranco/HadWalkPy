@@ -5,8 +5,6 @@ The main features of the code are:
 
 The code is built into a single class under the file: decompose_wind.py. 
 
-An example code with comments is found under the file: example.py
-
 The decomposition is based on the study of Schwendike et al., (2014), which decomposes a full 3D circulation into 2 orthogonal 2D circulations, which is also called the $\psi$ method originally proposed by Keyser et al., (1989).
 
 The output from this code can be: 
@@ -17,6 +15,9 @@ The output from this code can be:
 4. Vertical velocity ($\omega_\lambda$, $\omega_\phi$).
 
 See the references for a full derivation of the relevant equations used to compute the diagnostics.
+
+An example code with comments is found under the file: example.py. To run the example code, modify the file paths to corresponding ua and va files. Notice that the code computes the diagnostics for monthly climatologies for a faster computation. Also modify the ouput path. In the example, only the outputs corresponding to fields 3 and 4 are saved (from the list above). The relevant switches to save points 1 and 2 are indicated in the example code. 
+
 
 *References*
 
