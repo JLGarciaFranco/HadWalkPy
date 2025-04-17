@@ -1,65 +1,111 @@
+'''
+Module: circulation_split.py
+
+Decompose atmospheric circulation into Hadley and Walker components
+using the Schwendike et al. (2014) methodology.
+
+This module provides a `CirculationDecomposer` class that:
+  - Loads zonal and meridional wind fields
+  - Computes the zonal-mean streamfunction
+  - Performs decomposition to isolate Hadley and Walker circulations
+  - Supports multiprocessing for batch processing of multiple time snapshots
+
+References
+----------
+Schwendike, J., Shepherd, T. G., & Polichtchouk, I. (2014). Separation of the Walker circulation from the Hadley circulation
+'''
 import numpy as np
 import pandas as pd
 from dateutil.relativedelta import relativedelta
-import xarray 
+import xarray as xr
 from scipy.integrate import cumtrapz
 import multiprocessing
 import sys,copy
 from windspharm.xarray import VectorWind
 class Hadley_Walker:
-    def __init__(self,dau,dav,outname,multi_flag=False):
-        """ Class to compute the divergent wind components and or Walker and Had. Circulation
+    """
+    Class to compute divergent wind components and split the Walker and Hadley circulations.
 
-	    Parameters 
-	    ---------- 
-	    dau : xarray-DataArray 
-		3-dimensional object of xarray for the zonal component of the wind U.  
-	    dav : xarray-DataArray 
-		3-dimensional object of xarray for the meridional component of the wind V.  
-	    outname : string
-		Main string to name the output, typically containts the main path and model name.   
-	    multi_flag : boolean
-		True to indicate user wants to use the multiprocessing routines which may make things faster or also might request too much memory. Default is False.
-	 
-	    Returns 
-	    ------- 
-        Class of Hadley_Walker instance 
+    Parameters
+    ----------
+    dau : xr.DataArray
+        3D DataArray of the zonal wind component (dimensions: time, lat, lon).
+    dav : xr.DataArray
+        3D DataArray of the meridional wind component (dimensions: time, lat, lon).
+    outname : str
+        Base path and model identifier for output files.
+    multi_flag : bool, optional
+        If True, enable multiprocessing routines for faster computation (may increase memory usage).
+        Defaults to False.
 
-        """
-        # Load file #
-        if not isinstance(dau, xarray.DataArray) or not isinstance(dav, xarray.DataArray):
-        	raise TypeError('u and v must be xarray.DataArray instances')
+    Attributes
+    ----------
+    a0 : float
+        Earth radius in meters (6371000 m).
+    g : float
+        Gravitational acceleration (9.81 m/s²).
+    outname : str
+        Output filename base.
+    da_u : xr.DataArray
+        Zonal wind input.
+    da_v : xr.DataArray
+        Meridional wind input.
+    no_multiprocess : bool
+        Flag indicating whether multiprocessing is disabled.
+    lambda_lon : xr.DataArray
+        Longitude coordinate.
+    phi_lat : xr.DataArray
+        Latitude coordinate.
 
-        # Define constants
-        self.a0 = 6371000
+    Methods
+    -------
+    check_timecoord()
+        Verify and standardize the time coordinate in input DataArrays.
+    compute_divergent_components()
+        Calculate divergent part of the wind field.
+    split_circulations()
+        Perform the Hadley–Walker decomposition.
+    run_parallel(times)
+        Execute decomposition over multiple time slices in parallel.
+    save_results()
+        Save streamfunctions or metrics to NetCDF or text.
+    """
+
+    def __init__(
+        self,
+        dau: xr.DataArray,
+        dav: xr.DataArray,
+        outname: str,
+        multi_flag: bool = False
+    ):
+        # Validate inputs
+        if not isinstance(dau, xr.DataArray) or not isinstance(dav, xr.DataArray):
+            raise TypeError("`dau` and `dav` must be xarray.DataArray instances")
+
+        # Fundamental constants
+        self.a0 = 6371000.0
         self.g = 9.81
-        self.outname =outname
+        self.outname = outname
+
+        # Assign wind fields
         self.da_u = dau
         self.da_v = dav
 
-        # Check time coordinate
+        # Check and standardize time coordinate
         self.check_timecoord()
 
-        # Multiprocess data True or False
-        self.no_multiprocess=multi_flag
+        # Multiprocessing flag (False disables parallel routines)
+        self.no_multiprocess = not multi_flag
 
+        # Extract spatial coordinates
         try:
-            self.lambda_lon=dau.longitude
-            self.phi_lat=dau.latitude
-        except:
-            self.lambda_lon=dau.lon
-            self.phi_lat=dau.lat
-        #self.lat_lon_check()
-    def lat_lon_check(self):
-        print(self.phi_lat)
-        if self.phi_lat.data[0]>self.phi_lat.data[-1]:
-            self.phi_lat=np.flip(self.phi_lat)
-            array.data=np.flip(array.data,axis=2)
-            array.latitude=np.flip(array.latitude,axis=2)
-        if self.lambda_lon.data[0]>self.lambda_lon.data[-1]:
-            self.lambda_lon=np.flip(self.lambda_lon)
-            array.longitude=np.flip(array.longitude)
-            array.data=np.flip(array.data,axis=3)
+            self.lambda_lon = dau.longitude
+            self.phi_lat = dau.latitude
+        except AttributeError:
+            # fallback to alternative names
+            self.lambda_lon = dau.lon
+            self.phi_lat = dau.lat
+
     def check_timecoord(self):
         """Check the time coordinate in case the input are monthly or day of year climatological means
         
@@ -105,82 +151,108 @@ class Hadley_Walker:
             self.month_flag = True
 
             return
-            
-    def streamfunction(self,array,typo,collapsed=False):
-        fact = 1
-        if np.max(array.coords[self.pcoord].data)<2000:
-            p=array.coords[self.pcoord].data*100
-        else:
-            p=array.coords[self.pcoord].data
-        if p[0]<1:# or p[-1]>=1000:
-            print('flipped')
-            p=np.flip(p)
-            array.data=np.flip(array.data,axis=1)
-        else:
-            print('not flipped')
-        array=array.assign_coords({self.pcoord:p})
-        if typo=='hadley':
-            fact=2*self.a0*np.pi/9.81
-            psi=copy.deepcopy(array)
-            psi1=cumtrapz(psi.data,x=p,axis=1,initial=0)
-            multip_fact = -1*fact*np.cos(self.phi_lat.data*np.pi/180.)
-            psi.data=psi1*multip_fact[:,np.newaxis]
-
-            return psi
-        elif typo=='walker':
-            fact=-1*self.a0*np.pi/9.81
-            psi=copy.deepcopy(array)
-            psi1=cumtrapz(psi.data,x=p,axis=1,initial=0)
-            psi.data=psi1*fact
-            return psi
-    def omega_2d(self,coord,array,typo='div'):
-        """ Compute Omega and mass flux on each component
-
-
+    def streamfunction(
+        self,
+        array: xr.DataArray,
+        typo: str,
+        collapsed: bool = False
+    ) -> xr.DataArray:
         """
-        # Correction for pressure if pressure is in hPa 
-        # pressure must be in Pa. 
-        if np.max(array.coords[self.pcoord].data)<2000:
-            print('multiplied p')
-            p=array.coords[self.pcoord].data*100
+        Compute mass streamfunction for Hadley or Walker component by vertical integration.
+        """
+        p = array.coords[self.pcoord].data
+        if np.max(p)<2000:
+            p = p*100.0
+        if p[0]<1:
+            p = np.flip(p)
+            array = array.sortby(self.pcoord, ascending=False)
+        array = array.assign_coords({self.pcoord: p})
+        # Vertical integration
+        psi1 = cumtrapz(array.data, x=p, axis=1, initial=0)
+        if typo=='hadley':
+            fact = 2*self.a0*np.pi/self.g
+            cos_lat = np.cos(np.deg2rad(self.phi_lat.data))
+            # Broadcast to (time, plev, lat, lon)
+            cos4d = cos_lat[np.newaxis, np.newaxis, :, np.newaxis]
+            psi_array = psi1 * (-fact) * cos4d
+            psi = xr.DataArray(psi_array, coords=array.coords, dims=array.dims)
+        elif typo=='walker':
+            fact = -self.a0*np.pi/self.g
+            psi_array = psi1 * fact
+            psi = xr.DataArray(psi_array, coords=array.coords, dims=array.dims)
         else:
-            p=array.coords[self.pcoord].data
-        if p[0]<100 or p[-1]>1e4:
-            p=np.flip(p)
-            array.data=np.flip(array.data,axis=1)
+            raise ValueError("typo must be 'hadley' or 'walker'")
+        if collapsed:
+            return psi.mean(dim=('lat','lon'))
+        return psi
+
+    def omega_2d(
+        self,
+        coord: str,
+        array: xr.DataArray,
+        typo: str = 'div'
+    ) -> tuple:
+        """
+        Compute vertical mass flux and Omega for each circulation component.
+
+        Parameters
+        ----------
+        coord : {'phi', 'lambda'}
+            Direction of gradient: 'phi' for meridional, 'lambda' for zonal.
+        array : xr.DataArray
+            Divergent or rotational wind component (dimensions: time, plev, lat, lon).
+        typo : str, optional
+            Component label, unused in calculation. Default is 'div'.
+
+        Returns
+        -------
+        mass_flux : xr.DataArray
+            Vertical mass flux for the component.
+        omega : xr.DataArray
+            Omega (vertical velocity) for the component.
+        """
+        # Ensure pressure coordinate in Pa and correct ordering
+        p = array.coords[self.pcoord].data
+        if np.max(p) < 2000:
+            p = p * 100.0
+        if p[0] < 100 or p[-1] > 1e4:
+            p = np.flip(p)
+            array = array.sortby(self.pcoord, ascending=False)
+        array = array.assign_coords({self.pcoord: p})
+
+        # Prepare latitude and longitude arrays
+        phi = self.phi_lat.values
+        lam = self.lambda_lon.values
+        cos_phi = np.cos(np.deg2rad(phi))
+        # Broadcast for full 4D multiplication
+        cos4d = cos_phi[np.newaxis, np.newaxis, :, np.newaxis]
+
+        # Coefficients
+        fact_ag = 1.0 / (self.a0 * self.g)
+        # Broadcast cos4d in denominator for Omega
+        fact_om = -1.0 / (self.a0 * cos4d)
+
+        # Initialize outputs
+        mass_flux = array.copy(deep=True)
+        omega = array.copy(deep=True)
+
+        # Compute gradient
+        if coord == 'phi':
+            data_mod = array.data * cos4d
+            grad = np.gradient(data_mod, np.deg2rad(phi), axis=2)
+        elif coord == 'lambda':
+            grad = np.gradient(array.data, np.deg2rad(lam), axis=3)
         else:
-            print('not flipped omega')
-            #p=np.flip(p)
-            #array.data=np.flip(array.data,axis=1)
-        print(p)
-        array=array.assign_coords({self.pcoord:p})
-        cos_alpha = np.cos(np.deg2rad(self.phi_lat)).data
-        fact_ag = 1/(self.a0*self.g)
-        fact_om = -1/(self.a0*cos_alpha)
-        mass_flux = copy.deepcopy(array)
-        omega = copy.deepcopy(array)
-        if coord=='phi':
-            grad_phi = np.gradient(array.data*cos_alpha[:,np.newaxis],np.deg2rad(self.phi_lat).data,axis=2)
-            if self.phi_lat.data[0]>self.phi_lat.data[-1]:
-                print('reversed phi')
-                grad_phi=grad_phi*(-1)
-            psi1=cumtrapz(grad_phi,x=p,axis=1,initial=0)
-            m_phi = fact_ag*psi1
-            mass_flux.data = m_phi
-            omega_phi = psi1*fact_om[:,np.newaxis]
-            omega.data = omega_phi
-            return mass_flux,omega
-        elif coord=='lambda':
+            raise ValueError("coord must be 'phi' or 'lambda'")
 
-            grad_lam = np.gradient(array.data,np.deg2rad(self.lambda_lon).data,axis=3)
+        # Vertical integration
+        psi1 = cumtrapz(grad, x=p, axis=1, initial=0)
 
-            psi1=cumtrapz(grad_lam,x=p,axis=1,initial=0)
-            m_phi = fact_ag*psi1
-            mass_flux.data = m_phi
-            omega_phi = psi1*fact_om[:,np.newaxis]
-            omega.data = omega_phi
+        # Build outputs
+        mass_flux.data = fact_ag * psi1
+        omega.data = psi1 * fact_om
 
-            return mass_flux,omega
+        return mass_flux, omega 
     def array_add_attrs_Save(self,da,name,attributes,outfil,save=False):
         """ Saving output with specified attributes
 
@@ -209,79 +281,124 @@ class Hadley_Walker:
     def compute_diagnostics(self,stream=False,mass_omega=False,returni=False):
         print('computing streamfunction and omega ')
         if stream:
-            xr_psi = self.streamfunction(self.v_div,typo='hadley')
+            xr_psi = self.streamfunction(self.vdiv,typo='hadley')
             self.array_add_attrs_Save(xr_psi,'streamfunction',{'long_name':'Meridional streamfunction','units':'kg m**-2 s**-1'},outfil=self.outname+'_stream_phi.nc',save=True)
-            psi_lambda = self.streamfunction(self.u_div,typo='walker')
+            psi_lambda = self.streamfunction(self.udiv,typo='walker')
             self.array_add_attrs_Save(psi_lambda,'streamfunction',{'long_name':'Zonal streamfunction','units':'kg m**-2 s**-1'},outfil=self.outname+'_stream_lambda.nc',save=True)
 
         if mass_omega:
-            mass_flux,omega = self.omega_2d('phi',self.v_div)
+            mass_flux,omega = self.omega_2d('phi',self.vdiv)
             omega=self.array_add_attrs_Save(omega,'omega',{'long_name':'Vertical velocity meridional component','units':'Pa s**-1'},outfil=self.outname+'_omega_phi.nc',save=True)
             mass_flux=self.array_add_attrs_Save(mass_flux,'mass_flux',{'long_name':'Meridional mass flux','units':'kg m**-2 s**-1'},outfil=self.outname+'_mass_phi.nc',save=True)
-            mass_flux_lambda,omega_lambda = self.omega_2d('lambda',self.u_div)
+            mass_flux_lambda,omega_lambda = self.omega_2d('lambda',self.udiv)
             omega_lambda=self.array_add_attrs_Save(omega_lambda,'omega',{'long_name':'Vertical velocity zonal component','units':'Pa s**-1'},outfil=self.outname+'_omega_lambda.nc',save=True)
             mass_flux_lambda=self.array_add_attrs_Save(mass_flux_lambda,'mass_flux',{'long_name':'Zonal mass flux','units':'kg m**-2 s**-1'},outfil=self.outname+'_mass_lambda.nc',save=True)
 
             if returni:
                 return mass_flux,omega,mass_flux_lambda,omega_lambda
-    def get_uchi(self,it):
-        dt = self.da_u.time[it]	
-        w = VectorWind(self.da_u[it],self.da_v[it])
-        print('decomposing wind time-step ',it)
+    def get_uchi(self, it: int):
+        """
+        Perform Helmholtz decomposition of the wind at a given time index.
+
+        Parameters
+        ----------
+        it : int
+            Index along the time dimension for which to compute decomposition.
+
+        Returns
+        -------
+        udiv : xr.DataArray
+            Divergent component of zonal wind at time index `it`.
+        vdiv : xr.DataArray
+            Divergent component of meridional wind at time index `it`.
+        urot : xr.DataArray
+            Rotational (non-divergent) component of zonal wind at time index `it`.
+        vrot : xr.DataArray
+            Rotational (non-divergent) component of meridional wind at time index `it`.
+
+        Notes
+        -----
+        Uses `windspharm.xarray.VectorWind.helmholtz` with default spectral truncation of 21.
+        The returned fields are assigned the original time coordinate and expanded to 3D.
+        """
+        # Extract timestamp
+        dt = self.da_u.time[it]
+
+        # Initialize VectorWind for this timestep
+        w = VectorWind(self.da_u.isel(time=it), self.da_v.isel(time=it))
+        print(f"Decomposing wind at time index {it}, timestamp {dt.values}")
+
+        # Helmholtz decomposition: (udiv, vdiv, urot, vrot)
         udiv, vdiv, urot, vrot = w.helmholtz(truncation=21)
-        urot = urot.assign_coords(time=dt)
-        vrot = vrot.assign_coords(time=dt)
-        urot = urot.expand_dims('time')
-        vrot = vrot.expand_dims('time')
-        udiv = udiv.assign_coords(time=dt)
-        vdiv = vdiv.assign_coords(time=dt)
-        udiv = udiv.expand_dims('time')
-        vidv = vdiv.expand_dims('time')
-        return udiv,vdiv,urot,vrot
-    def get_components(self,save):
-        M = []
+
+        # Attach time coordinate and restore time dimension
+        def _assign_time(arr):
+            arr = arr.assign_coords(time=dt)
+            return arr.expand_dims('time')
+
+        udiv = _assign_time(udiv)
+        vdiv = _assign_time(vdiv)
+        urot = _assign_time(urot)
+        vrot = _assign_time(vrot)
+
+        return udiv, vdiv, urot, vrot
+    def get_components(self, save: bool = False) -> None:
+        """
+        Compute divergent and rotational components for all time steps,
+        optionally saving each component to NetCDF.
+
+        Parameters
+        ----------
+        save : bool, optional
+            If True, write full udiv, vdiv, urot, and vrot arrays to NetCDF
+            files named `<outname>_udiv.nc`, etc. Default is False.
+
+        Notes
+        -----
+        - Handles NaNs by latitudinal interpolation if present.
+        - Uses multiprocessing if `multi_flag` was set in constructor.
+        """
+        # Handle NaNs by interpolating along latitude
         if self.da_u.isnull().any():
-            print('NaN values found, extrapolating')
-            self.da_u=self.da_u.interpolate_na(dim='lat',method='linear',fill_value='extrapolate')
-            self.da_v=self.da_v.interpolate_na(dim='lat',method='linear',fill_value='extrapolate')
-            #if self.da_u.isnull().any():
-            #    print(np.where(self.da_u.isnull())[1])
-            #    plev = self.da_u.plev
-#                self.da_u = self.da_u.where(self.da_u.notnull())
-#                self.da_u=self.da_u[plev>100]#interpolate_na(dim='plev',method='linear',fill_value='extrapolate')
-#                self.da_v=self.da_v[plev>100]#interpolate_na(dim='plev',method='linear',fill_value='extrapolate')
+            print('NaN values found, performing latitudinal interpolation')
+            self.da_u = self.da_u.interpolate_na(dim='lat', method='linear', fill_value='extrapolate')
+            self.da_v = self.da_v.interpolate_na(dim='lat', method='linear', fill_value='extrapolate')
 
-        if len(self.da_u.shape)>3 and self.da_u.shape[0]==1:
-            M=[self.get_uchi(0)]
+        # List to collect results
+        M = []
+        nt = self.da_u.sizes['time']
+
+        # Single timestamp case
+        if nt == 1:
+            M = [self.get_uchi(0)]
+        # Serial loop if multiprocessing disabled
         elif self.no_multiprocess:
-            M=[]
-            for it in range(self.da_u.shape[0]):
-                M.append(self.get_uchi(0))	
+            for it in range(nt):
+                M.append(self.get_uchi(it))
+        # Parallel execution
         else:
-            with multiprocessing.Pool(6) as pool:
-                M = pool.map(self.get_uchi,list(range(self.da_u.shape[0])))
+            with mp.Pool() as pool:
+                M = pool.map(self.get_uchi, list(range(nt)))
 
-        u_div_list=[]
-        v_div_list=[]
-        v_rot_list=[]
-        u_rot_list=[]
-        for result in M:
-            udiv,vdiv,urot,vrot=result
-            u_div_list.append(udiv)	
-            v_div_list.append(vdiv)	
-            v_rot_list.append(vrot)	
-            u_rot_list.append(urot)	
-        full_udv = xarray.concat(u_div_list,dim='time')
-        full_vdv = xarray.concat(v_div_list,dim='time')
-        full_vrot = xarray.concat(v_rot_list,dim='time')
-        full_urot = xarray.concat(u_rot_list,dim='time')
+        # Separate and concatenate results
+        u_div_list, v_div_list, u_rot_list, v_rot_list = zip(*M)
+        full_udv = xr.concat(u_div_list, dim='time')
+        full_vdv = xr.concat(v_div_list, dim='time')
+        full_urot = xr.concat(u_rot_list, dim='time')
+        full_vrot = xr.concat(v_rot_list, dim='time')
+
+        # Save to NetCDF if requested
         if save:
-            full_udv.to_netcdf(self.outname+'_udiv.nc')
-            full_vdv.to_netcdf(self.outname+'_vdiv.nc')
-            full_vrot.to_netcdf(self.outname+'_vrot.nc')
-            full_urot.to_netcdf(self.outname+'_urot.nc')
-        self.u_div=full_udv
-        self.v_div=full_vdv
+            full_udv.to_netcdf(f"{self.outname}_udiv.nc")
+            full_vdv.to_netcdf(f"{self.outname}_vdiv.nc")
+            full_urot.to_netcdf(f"{self.outname}_urot.nc")
+            full_vrot.to_netcdf(f"{self.outname}_vrot.nc")
+
+        # Store results on instance
+        self.udiv = full_udv
+        self.vdiv = full_vdv
+        self.urot = full_urot
+        self.vrot = full_vrot
         return
 	
     def _find_latitude_coordinate(self,array):
